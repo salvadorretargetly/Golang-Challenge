@@ -8,4 +8,8 @@ saved in the cache.
 2- We add a new function hasExpired to check if the item expirationTime has surpass the maxAge.
 
 
+3- We add a new property inside the cache struct to manage the concurrence to get the price of a list of items. This propertie allows you set a limit of concurrent 
+calls to not overhead the price's service. For example if you set maxConcurrentRoutines = 5 the service wil always manage 5 routines trying to get the price at the same time.
 
+
+4- We added the goroutines logic inside the function GetPricesFor to manage several calls at the same time.

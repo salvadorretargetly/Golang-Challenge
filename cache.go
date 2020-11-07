@@ -15,9 +15,10 @@ type PriceService interface {
 // The cache will remember prices we ask for, so that we don't have to wait on every call
 // Cache should only return a price if it is not older than "maxAge", so that we don't get stale prices
 type TransparentCache struct {
-	actualPriceService PriceService
-	maxAge             time.Duration
-	prices             map[string]Item
+	actualPriceService 		PriceService
+	maxAge             		time.Duration
+	prices             		map[string]Item
+	maxConcurrentRoutines	int
 }
 
 type Item struct {
@@ -57,16 +58,65 @@ func (c *TransparentCache) GetPriceFor(itemCode string) (float64, error) {
 
 // GetPricesFor gets the prices for several items at once, some might be found in the cache, others might not
 // If any of the operations returns an error, it should return an error as well
-func (c *TransparentCache) GetPricesFor(itemCodes ...string) ([]float64, error) {
-	results := []float64{}
-	for _, itemCode := range itemCodes {
-		// TODO: parallelize this, it can be optimized to not make the calls to the external service sequentially
-		price, err := c.GetPriceFor(itemCode)
-		if err != nil {
-			return []float64{}, err
+func (c *TransparentCache) GetPricesFor(itemCodes ...string) (results []float64,err error) {
+
+
+	concurrentRoutines := make(chan int, c.maxConcurrentRoutines)
+
+	defer func() {
+		if e := recover(); e != nil {
+			err = e.(error)
+			results = []float64{}
 		}
-		results = append(results, price)
+	}()
+
+	for i := 0; i < c.maxConcurrentRoutines; i++ {
+		concurrentRoutines <- 1
 	}
+
+	// The done channel indicates when a single goroutine has
+	// finished its job.
+	done := make(chan bool)
+	
+	// waitForAllJobs channel allows the main program
+	// to wait until we have indeed done all the calls.
+	waitForAllCalls := make(chan bool)
+
+	// Collect all the cache calls, and since the cache call is finished, we can
+	// release another spot for a routine.
+	go func() {
+		for i := 0 ; i < len(itemCodes); i++ {
+			<-done
+			// Say that another goroutine can now start.
+			concurrentRoutines <- 1
+		}
+		// We have collected all the jobs, the program
+		// can now terminate
+		waitForAllCalls <- true
+	}()
+
+
+	for _, itemCode := range itemCodes {
+
+		<-concurrentRoutines
+
+		go func(itemCode string) {
+	
+			defer func() {
+				done <-true
+			}()
+		
+			price, err := c.GetPriceFor(itemCode)
+			if err != nil {
+				panic(err)
+			}
+
+			results = append(results, price)
+		}(itemCode)
+	}
+
+	<-waitForAllCalls
+
 	return results, nil
 }
 
