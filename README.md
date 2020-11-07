@@ -13,3 +13,7 @@ calls to not overhead the price's service. For example if you set maxConcurrentR
 
 
 4- We added the goroutines logic inside the function GetPricesFor to manage several calls at the same time.
+
+
+5- We maded some changes in test module. We added the new maxConcurrentRoutines param for the cache's constructor. At the same time we verify that all test pass successfully.
+We had to add a mutex to solve an issue with the concurrent write to the price mapping. All the test pass successfully.

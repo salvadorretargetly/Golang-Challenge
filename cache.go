@@ -3,6 +3,7 @@ package sample1
 import (
 	"time"
 	"fmt"
+	"sync"
 )
 
 // PriceService is a service that we can use to get prices for the items
@@ -19,6 +20,7 @@ type TransparentCache struct {
 	maxAge             		time.Duration
 	prices             		map[string]Item
 	maxConcurrentRoutines	int
+	pricesMutex 			*sync.RWMutex
 }
 
 type Item struct {
@@ -27,11 +29,13 @@ type Item struct {
 }
 
 
-func NewTransparentCache(actualPriceService PriceService, maxAge time.Duration) *TransparentCache {
+func NewTransparentCache(actualPriceService PriceService, maxAge time.Duration,maxConcurrentRoutines int) *TransparentCache {
 	return &TransparentCache{
 		actualPriceService: actualPriceService,
 		maxAge:             maxAge,
 		prices:             map[string]Item{},
+		maxConcurrentRoutines:	maxConcurrentRoutines,
+		pricesMutex:			&sync.RWMutex{},
 	}
 }
 
@@ -52,7 +56,10 @@ func (c *TransparentCache) GetPriceFor(itemCode string) (float64, error) {
 	}
 
 	item = Item{price,time.Now()}
+	c.pricesMutex.Lock()
 	c.prices[itemCode] = item
+	c.pricesMutex.Unlock()
+
 	return price, nil
 }
 
@@ -60,6 +67,7 @@ func (c *TransparentCache) GetPriceFor(itemCode string) (float64, error) {
 // If any of the operations returns an error, it should return an error as well
 func (c *TransparentCache) GetPricesFor(itemCodes ...string) (results []float64,err error) {
 
+	var resultMutex sync.RWMutex
 
 	concurrentRoutines := make(chan int, c.maxConcurrentRoutines)
 
@@ -100,7 +108,7 @@ func (c *TransparentCache) GetPricesFor(itemCodes ...string) (results []float64,
 
 		<-concurrentRoutines
 
-		go func(itemCode string) {
+		go func(itemCode string,resultMutex *sync.RWMutex) {
 	
 			defer func() {
 				done <-true
@@ -111,8 +119,11 @@ func (c *TransparentCache) GetPricesFor(itemCodes ...string) (results []float64,
 				panic(err)
 			}
 
+			resultMutex.Lock()
 			results = append(results, price)
-		}(itemCode)
+			resultMutex.Unlock()
+
+		}(itemCode,&resultMutex)
 	}
 
 	<-waitForAllCalls
