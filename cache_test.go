@@ -176,3 +176,73 @@ func TestGetPricesFor_ParallelizeCalls(t *testing.T) {
 		t.Error("calls took too long, expected them to take a bit over one second")
 	}
 }
+
+// Check that cache returns an error if one external service call fail
+func TestGetPriceFor_ReturnsErrorWithMultiplesItems(t *testing.T) {
+	mockService := &mockPriceService{
+		mockResults: map[string]mockResult{
+			"p1": {price: 5, err: nil},
+			"p2": {price: 25, err: nil},
+			"p3": {price: 0, err: fmt.Errorf("some error")},
+		},
+	}
+	cache := NewTransparentCache(mockService, time.Minute,5)
+	_, err := cache.GetPricesFor("p1","p2","p3")
+	if err == nil {
+		t.Errorf("expected error, got nil")
+	}
+}
+
+
+
+// Check that cache returns correctly passing duplicates itemCodes
+func TestGetPriceFor_DuplicateItemCodes(t *testing.T) {
+
+	mockService := &mockPriceService{
+		mockResults: map[string]mockResult{
+			"p1": {price: 5, err: nil},
+			"p2": {price: 7, err: nil},
+			"p3": {price: 3, err: nil},
+		},
+	}
+
+	cache := NewTransparentCache(mockService, time.Minute,5)
+	assertFloats(t, []float64{5,7,3,5,3}, getPricesWithNoErr(t, cache,"p1","p2","p3","p1","p3"), "wrong price returned")
+}
+
+
+
+
+// Check that cache returns  in a short time period as if we were making only one request with a big number of item codes.
+func TestGetPricesFor_StressfullTest(t *testing.T) {
+
+	mockService := &mockPriceService{
+		callDelay: time.Second, // each call to external service takes one full second
+		mockResults: map[string]mockResult{
+			"p1": {price: 1, err: nil},
+			"p2": {price: 2, err: nil},
+			"p3": {price: 3, err: nil},
+			"p4": {price: 4, err: nil},
+			"p5": {price: 5, err: nil},
+			"p6": {price: 6, err: nil},
+			"p7": {price: 7, err: nil},
+			"p8": {price: 8, err: nil},
+			"p9": {price: 9, err: nil},
+			"p10": {price: 10, err: nil},
+			"p11": {price: 11, err: nil},
+			"p12": {price: 12, err: nil},
+			"p13": {price: 13, err: nil},
+			"p14": {price: 14, err: nil},
+			"p15": {price: 15, err: nil},
+			"p16": {price: 16, err: nil},
+		},
+	}
+
+	cache := NewTransparentCache(mockService, time.Minute,20)
+	start := time.Now()
+	assertFloats(t, []float64{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16}, getPricesWithNoErr(t, cache, "p1", "p2","p3","p4","p5","p6","p7","p8","p9","p10","p11","p12","p13","p14","p15","p16"), "wrong price returned")
+	elapsedTime := time.Since(start)
+	if elapsedTime > (1200 * time.Millisecond) {
+		t.Error("calls took too long, expected them to take a bit over one second")
+	}
+}

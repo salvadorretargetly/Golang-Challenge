@@ -28,6 +28,12 @@ type Item struct {
 	expirationTime time.Time
 }
 
+type Result struct {
+	itemCode string
+	price	float64
+	err	error
+}
+
 
 func NewTransparentCache(actualPriceService PriceService, maxAge time.Duration,maxConcurrentRoutines int) *TransparentCache {
 	return &TransparentCache{
@@ -67,70 +73,123 @@ func (c *TransparentCache) GetPriceFor(itemCode string) (float64, error) {
 // If any of the operations returns an error, it should return an error as well
 func (c *TransparentCache) GetPricesFor(itemCodes ...string) (results []float64,err error) {
 
-	var resultMutex sync.RWMutex
-
 	concurrentRoutines := make(chan int, c.maxConcurrentRoutines)
 
-	defer func() {
-		if e := recover(); e != nil {
-			err = e.(error)
-			results = []float64{}
+	results = make([]float64,len(itemCodes))
+
+	// The done channel indicates when a single goroutine has
+	// finished its job.
+	done := make(chan bool)
+
+	resultChannel := make(chan Result,len(itemCodes))
+	itemCodesChannel := make(chan string,len(itemCodes))
+
+	//This map will save the itemCode index position
+	//We we must make sure return the prices in the same order , same place as the item's code in the function param because of the concurrence
+	// Example: [p1,p2,p3,p4] => [price p1, price p2, price p3, price p4]
+	itemCodePositionMapping := make(map[string][]int,0)
+
+
+	//We load the itemCodePositionMapping and the unique item's codes in the channel
+	for position ,itemCode := range itemCodes {
+
+		if _, ok := itemCodePositionMapping[itemCode] ; !ok  {
+			itemCodePositionMapping[itemCode] = make([]int,0)
+			itemCodesChannel<-itemCode
 		}
-	}()
+
+		itemCodePositionMapping[itemCode] = append(itemCodePositionMapping[itemCode],position)
+	}
+
+
+	uniqueItemCodesLen := len(itemCodesChannel)
 
 	for i := 0; i < c.maxConcurrentRoutines; i++ {
 		concurrentRoutines <- 1
 	}
 
-	// The done channel indicates when a single goroutine has
-	// finished its job.
-	done := make(chan bool)
-	
-	// waitForAllJobs channel allows the main program
+	// waitForAllCalls channel allows the main program
 	// to wait until we have indeed done all the calls.
-	waitForAllCalls := make(chan bool)
+	waitForAllCalls := make(chan error)
 
 	// Collect all the cache calls, and since the cache call is finished, we can
 	// release another spot for a routine.
 	go func() {
-		for i := 0 ; i < len(itemCodes); i++ {
+		for i := 0 ; i < uniqueItemCodesLen ; i++ {
+			
 			<-done
+
+			result := <- resultChannel
+
+			if result.err != nil {
+				
+				//If an error ocurred we close the channels to finish inmediately with the routines execution
+				close(concurrentRoutines)
+				close(itemCodesChannel)
+				waitForAllCalls <- result.err
+				return 
+		
+			} else {				
+
+				//This function make sure save the item code price in the correspondent position.
+				saveItemPriceInTheCorrectPosition(&results,&itemCodePositionMapping,result.itemCode,result.price)
+		
+			}
+
 			// Say that another goroutine can now start.
 			concurrentRoutines <- 1
 		}
-		// We have collected all the jobs, the program
+
+		// We have collected all the calls, the program
 		// can now terminate
-		waitForAllCalls <- true
+		close(concurrentRoutines)
+		close(itemCodesChannel)
+		waitForAllCalls <- nil
 	}()
 
-
-	for _, itemCode := range itemCodes {
+	//At this point the itemCodesChannel has only uniques codes. This is because we dont want to make more than once request for the same code.
+	for itemCode := range itemCodesChannel {
 
 		<-concurrentRoutines
 
-		go func(itemCode string,resultMutex *sync.RWMutex) {
+		go func(itemCode string) {
 	
 			defer func() {
 				done <-true
 			}()
 		
 			price, err := c.GetPriceFor(itemCode)
+			
 			if err != nil {
-				panic(err)
+				resultChannel <- Result{itemCode,0,err}				
+				return
 			}
 
-			resultMutex.Lock()
-			results = append(results, price)
-			resultMutex.Unlock()
+			resultChannel <- Result{itemCode,price,nil}				
+			return
 
-		}(itemCode,&resultMutex)
+		}(itemCode)
+
 	}
 
-	<-waitForAllCalls
+	err = <-waitForAllCalls
+
+	if err != nil {
+		return []float64{},err
+	}
 
 	return results, nil
 }
 
+
+func saveItemPriceInTheCorrectPosition(results *[]float64,itemCodePositionMapping *map[string][]int,itemCode string,price float64) {
+
+	positions := (*itemCodePositionMapping)[itemCode]
+
+	for _, index := range positions {
+		(*results)[index] = price
+	}
+}
 
 
 //hasExpired checks if the item has surpassed the maxAge

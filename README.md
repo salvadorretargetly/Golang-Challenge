@@ -17,3 +17,17 @@ calls to not overhead the price's service. For example if you set maxConcurrentR
 
 5- We maded some changes in test module. We added the new maxConcurrentRoutines param for the cache's constructor. At the same time we verify that all test pass successfully.
 We had to add a mutex to solve an issue with the concurrent write to the price mapping. All the test pass successfully.
+
+6- We make some refactor of the handling response for the cache go routine in fuction GetPricesFor. Apart from that we add logic to make sure return the prices in the correct order, that means 
+for example that if you send by param a list of item codes in an specific order you must receive their correspond prices in the same order:
+
+Example: p2,p15,p18,p1,p2 => price p2, price p15, price p18, price p1, price p2
+
+We verify if there were sent duplicates item codes by param and in these case we ask to the cache only the uniques. This is because we dont want to make unnecessary calls to the cache.
+
+
+7- We add new unit test.
+    -TestGetPriceFor_ReturnsErrorWithMultiplesItems: Check that cache returns an error if one external service call fail
+    -TestGetPriceFor_DuplicateItemCodes: Check that cache returns correctly passing duplicates itemCodes
+    -TestGetPricesFor_StressfulTest: Check that cache returns  in a short time period as if we were making only one request with a big number of item codes.
+
